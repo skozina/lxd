@@ -71,6 +71,7 @@ import (
 	"github.com/canonical/lxd/lxd/storage/s3/miniod"
 	"github.com/canonical/lxd/lxd/sys"
 	"github.com/canonical/lxd/lxd/task"
+	"github.com/canonical/lxd/lxd/temporal"
 	"github.com/canonical/lxd/lxd/ubuntupro"
 	"github.com/canonical/lxd/lxd/ucred"
 	"github.com/canonical/lxd/lxd/util"
@@ -1642,6 +1643,9 @@ func (d *Daemon) init() error {
 
 		return fmt.Errorf("Failed to initialize global database: %w", err)
 	}
+
+	//now cluster db is ready. we can go
+	temporal.Init(d.State(), d.shutdownCtx, d.db)
 
 	// Load the embedded OpenFGA authorizer. This cannot be loaded until after the cluster database is initialised,
 	// so the TLS authorizer must be loaded first to set up clustering.
