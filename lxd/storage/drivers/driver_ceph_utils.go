@@ -131,6 +131,10 @@ func (d *ceph) rbdCreateVolume(vol Volume, size string) error {
 		cmd = append(cmd, "--data-pool", d.config["ceph.osd.data_pool_name"])
 	}
 
+	// Ceph seems to have a limitation that if an image is smaller than 512B, it is not writable.
+	// Make sure we create an image of a size at least 512B.
+	sizeBytes = max(sizeBytes, 512)
+
 	cmd = append(cmd,
 		"--size", fmt.Sprintf("%dB", sizeBytes),
 		"create",
