@@ -1085,6 +1085,11 @@ func isEitherAllowOrBlockOrManaged(value string) error {
 	return validate.Optional(validate.IsOneOf("block", "allow", "managed"))(value)
 }
 
+func isValidStorage(s *state.State, storage string) (err error) {
+	_, err = daemonStorageValidate(s, storage)
+	return err
+}
+
 // projectValidateConfig validates whether project config keys follow the expected format.
 // Any value checks that rely on the state of the database should be performed on AllowProjectUpdate,
 // so that we are performing these checks and updating the project in a single transaction.
@@ -1472,6 +1477,24 @@ func projectValidateConfig(s *state.State, config map[string]string, defaultNetw
 		//  defaultdesc: `block`
 		//  shortdesc: Whether to prevent creating instance or volume snapshots
 		"restricted.snapshots": isEitherAllowOrBlock,
+		// lxdmeta:generate(entities=project; group=miscellaneous; key=storage.backups_volume)
+		// Specify the volume using the syntax `POOL/VOLUME`.
+		// ---
+		//  type: string
+		//  defaultdesc: `block`
+		//  shortdesc: Volume to use to store backup tarballs
+		"storage.backups_volume": func(storage string) error {
+			return isValidStorage(s, storage)
+		},
+		// lxdmeta:generate(entities=project; group=miscellaneous; key=storage.images_volume)
+		// Specify the volume using the syntax `POOL/VOLUME`.
+		// ---
+		//  type: string
+		//  defaultdesc: `block`
+		//  shortdesc: Volume to use to store the image tarballs
+		"storage.images_volume": func(storage string) error {
+			return isValidStorage(s, storage)
+		},
 	}
 
 	// Add the storage pool keys.
@@ -1570,6 +1593,11 @@ func projectValidateConfig(s *state.State, config map[string]string, defaultNetw
 	// restrictions when they are configured.
 	if shared.IsTrue(config["restricted"]) && shared.IsFalse(config["features.profiles"]) {
 		return errors.New("Projects without their own profiles cannot be restricted")
+	}
+
+	// Disallow setting external storage for images for projects without images.
+	if config["features.images"] == "false" && config["storage.images_volume"] != "" {
+		return errors.New("Projects without images cannot have images storage configured")
 	}
 
 	return nil
