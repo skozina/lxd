@@ -10,7 +10,7 @@ import (
 	"os"
 	"slices"
 
-	lxd "github.com/canonical/lxd/client"
+	"github.com/canonical/lxd/client"
 	"github.com/canonical/lxd/lxd/auth"
 	"github.com/canonical/lxd/lxd/auth/oidc"
 	"github.com/canonical/lxd/lxd/cluster"
@@ -965,7 +965,7 @@ func doAPI10UpdateTriggers(d *Daemon, nodeChanged, clusterChanged map[string]str
 
 	value, ok = nodeChanged["storage.backups_volume"]
 	if ok {
-		err := daemonStorageMove(s, "backups/project_default", value)
+		err := daemonStorageMove(s, "backups", value)
 		if err != nil {
 			return err
 		}
@@ -973,7 +973,7 @@ func doAPI10UpdateTriggers(d *Daemon, nodeChanged, clusterChanged map[string]str
 
 	value, ok = nodeChanged["storage.images_volume"]
 	if ok {
-		err := daemonStorageMove(s, "images/project_default", value)
+		err := daemonStorageMove(s, "images", value)
 		if err != nil {
 			return err
 		}

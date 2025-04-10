@@ -830,7 +830,7 @@ func ImageUnpack(imageFile string, vol drivers.Volume, destBlockFile string, sys
 		}
 	} else {
 		// Dealing with unified tarballs require an initial unpack to a temporary directory.
-		tempDir, err := os.MkdirTemp(shared.VarPath("images/project_default"), "lxd_image_unpack_")
+		tempDir, err := os.MkdirTemp(shared.VarPath("images"), "lxd_image_unpack_")
 		if err != nil {
 			return -1, err
 		}

@@ -10,8 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -343,20 +341,6 @@ func projectsPost(d *Daemon, r *http.Request) response.Response {
 				if err != nil {
 					return err
 				}
-			}
-		}
-
-		// Create project image directory
-		imagesDir := filepath.Join(shared.VarPath("images"), "project_"+project.Name)
-		err := os.Mkdir(imagesDir, 0700)
-		if err != nil {
-			if !os.IsExist(err) {
-				return fmt.Errorf("Failed to create project images dir %q: %w", imagesDir, err)
-			}
-
-			err = os.Chmod(imagesDir, 0700)
-			if err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("Failed to chmod project images dir %q: %w", imagesDir, err)
 			}
 		}
 
@@ -890,18 +874,7 @@ func projectPost(d *Daemon, r *http.Request) response.Response {
 				return err
 			}
 
-			err = cluster.RenameProject(ctx, tx.Tx(), name, req.Name)
-			if err != nil {
-				return err
-			}
-
-			oldDir := filepath.Join(shared.VarPath("images"), "project_"+name)
-			newDir := filepath.Join(shared.VarPath("images"), "project_"+req.Name)
-			err = os.Rename(oldDir, newDir)
-			if err != nil {
-				return fmt.Errorf("Failed to rename project images dir %q: %w", oldDir, err)
-			}
-			return nil
+			return cluster.RenameProject(ctx, tx.Tx(), name, req.Name)
 		})
 		if err != nil {
 			return err
@@ -1473,20 +1446,6 @@ func projectValidateConfig(s *state.State, config map[string]string, defaultNetw
 		//  defaultdesc: `block`
 		//  shortdesc: Whether to prevent creating instance or volume snapshots
 		"restricted.snapshots": isEitherAllowOrBlock,
-		// lxdmeta:generate(entities=project; group=miscellaneous; key=storage.backups_volume)
-		// Specify the volume using the syntax `POOL/VOLUME`.
-		// ---
-		//  type: string
-		//  defaultdesc: `block`
-		//  shortdesc: Volume to use to store backup tarballs
-		"storage.backups_volume": validate.Optional(),
-		// lxdmeta:generate(entities=project; group=miscellaneous; key=storage.images_volume)
-		// Specify the volume using the syntax `POOL/VOLUME`.
-		// ---
-		//  type: string
-		//  defaultdesc: `block`
-		//  shortdesc: Volume to use to store the image tarballs
-		"storage.images_volume": validate.Optional(),
 	}
 
 	// Add the storage pool keys.
