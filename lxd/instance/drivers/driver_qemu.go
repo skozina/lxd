@@ -37,7 +37,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v2"
 
-	"github.com/canonical/lxd/client"
+	lxd "github.com/canonical/lxd/client"
 	agentAPI "github.com/canonical/lxd/lxd-agent/api"
 	"github.com/canonical/lxd/lxd/apparmor"
 	"github.com/canonical/lxd/lxd/cgroup"
@@ -6435,7 +6435,7 @@ func (d *qemu) Export(w io.Writer, properties map[string]string, expiration time
 	}
 
 	// Convert from raw to qcow2 and add to tarball.
-	tmpPath, err := os.MkdirTemp(shared.VarPath("images"), "lxd_export_")
+	tmpPath, err := os.MkdirTemp(shared.VarPath("images/project_default"), "lxd_export_")
 	if err != nil {
 		return meta, err
 	}

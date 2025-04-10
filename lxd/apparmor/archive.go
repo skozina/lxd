@@ -105,7 +105,7 @@ func archiveProfile(outputPath string, allowedCommandPaths []string) (string, er
 		backupsPath = backupsPathFull
 	}
 
-	imagesPath := shared.VarPath("images")
+	imagesPath := shared.VarPath("images/project-default")
 	imagesPathFull, err := filepath.EvalSymlinks(imagesPath)
 	if err == nil {
 		imagesPath = imagesPathFull
