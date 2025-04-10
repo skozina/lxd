@@ -1446,6 +1446,20 @@ func projectValidateConfig(s *state.State, config map[string]string, defaultNetw
 		//  defaultdesc: `block`
 		//  shortdesc: Whether to prevent creating instance or volume snapshots
 		"restricted.snapshots": isEitherAllowOrBlock,
+		// lxdmeta:generate(entities=project; group=miscellaneous; key=storage.backups_volume)
+		// Specify the volume using the syntax `POOL/VOLUME`.
+		// ---
+		//  type: string
+		//  defaultdesc: `block`
+		//  shortdesc: Volume to use to store backup tarballs
+		"storage.backups_volume": validate.Optional(),
+		// lxdmeta:generate(entities=project; group=miscellaneous; key=storage.images_volume)
+		// Specify the volume using the syntax `POOL/VOLUME`.
+		// ---
+		//  type: string
+		//  defaultdesc: `block`
+		//  shortdesc: Volume to use to store the image tarballs
+		"storage.images_volume": validate.Optional(),
 	}
 
 	// Add the storage pool keys.
