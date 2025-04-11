@@ -180,6 +180,21 @@ func ProjectHasImages(ctx context.Context, tx *sql.Tx, name string) (bool, error
 	return enabled, nil
 }
 
+// ProjectStorageImagesVolume is a helper to retrieve `storage.images_volume` config
+func ProjectImagesVolume(ctx context.Context, tx *sql.Tx, name string) (string, error) {
+	project, err := GetProject(ctx, tx, name)
+	if err != nil {
+		return "", fmt.Errorf("fetch project: %w", err)
+	}
+
+	config, err := GetProjectConfig(ctx, tx, project.ID)
+	if err != nil {
+		return "", err
+	}
+
+	return config["storage.images_volume"], nil
+}
+
 // UpdateProject updates the project matching the given key parameters.
 func UpdateProject(ctx context.Context, tx *sql.Tx, name string, object api.ProjectPut) error {
 	id, err := GetProjectID(ctx, tx, name)

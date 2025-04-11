@@ -41,6 +41,7 @@ func (s *OS) initDirs() error {
 		{filepath.Join(s.VarDir, "devlxd"), 0755},
 		{filepath.Join(s.VarDir, "disks"), 0700},
 		{filepath.Join(s.VarDir, "images"), 0700},
+		{filepath.Join(s.VarDir, "images/daemon"), 0700},
 		{s.LogDir, 0700},
 		{filepath.Join(s.VarDir, "networks"), 0711},
 		{filepath.Join(s.VarDir, "security"), 0700},

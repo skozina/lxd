@@ -28,7 +28,7 @@ import (
 	"github.com/kballard/go-shellquote"
 	"gopkg.in/yaml.v2"
 
-	"github.com/canonical/lxd/client"
+	lxd "github.com/canonical/lxd/client"
 	"github.com/canonical/lxd/lxd/auth"
 	"github.com/canonical/lxd/lxd/cluster"
 	"github.com/canonical/lxd/lxd/db"
@@ -392,6 +392,7 @@ func imgPostInstanceInfo(s *state.State, r *http.Request, req api.ImagesPost, op
 	sha256 := sha256.New()
 	var compress string
 	var writer io.Writer
+	var imagesVolume string
 
 	if req.CompressionAlgorithm != "" {
 		compress = req.CompressionAlgorithm
@@ -416,6 +417,7 @@ func imgPostInstanceInfo(s *state.State, r *http.Request, req api.ImagesPost, op
 		} else {
 			compress = s.GlobalConfig.ImagesCompressionAlgorithm()
 		}
+		imagesVolume = p.Config["storage.images_volume"]
 	}
 
 	// Setup tar, optional compress and sha256 to happen in one pass.
@@ -500,7 +502,7 @@ func imgPostInstanceInfo(s *state.State, r *http.Request, req api.ImagesPost, op
 	}
 
 	/* rename the file to the expected name so our caller can use it */
-	finalName := shared.VarPath("images", info.Fingerprint)
+	finalName := filepath.Join(shared.ImagesPath(projectName, imagesVolume), info.Fingerprint)
 	err = shared.FileMove(imageFile.Name(), finalName)
 	if err != nil {
 		return nil, err
@@ -828,7 +830,7 @@ func getImgPostInfo(s *state.State, r *http.Request, builddir string, project st
 		info.Type = imageType
 	}
 
-	imgfname := shared.VarPath("images", info.Fingerprint)
+	imgfname := filepath.Join(shared.ImagesPath(project, ""), info.Fingerprint)
 	err = shared.FileMove(imageTmpFilename, imgfname)
 	if err != nil {
 		l.Error("Failed to move the image tarfile", logger.Ctx{
@@ -839,7 +841,7 @@ func getImgPostInfo(s *state.State, r *http.Request, builddir string, project st
 	}
 
 	if rootfsTmpFilename != "" {
-		rootfsfname := shared.VarPath("images", info.Fingerprint+".rootfs")
+		rootfsfname := filepath.Join(shared.ImagesPath(project, ""), info.Fingerprint) + ".rootfs"
 		err = shared.FileMove(rootfsTmpFilename, rootfsfname)
 		if err != nil {
 			l.Error("Failed to move the rootfs tarfile", logger.Ctx{
@@ -1122,8 +1124,18 @@ func imagesPost(d *Daemon, r *http.Request) response.Response {
 		return response.SmartError(err)
 	}
 
+	var imageVolume string
+	err = s.DB.Cluster.Transaction(s.ShutdownCtx, func(ctx context.Context, tx *db.ClusterTx) error {
+		imageVolume, err = dbCluster.ProjectImagesVolume(ctx, tx.Tx(), projectName)
+		return err
+	})
+	if err != nil {
+		return response.SmartError(err)
+	}
+	fmt.Println("ERSIN imagesPost() imageVolume: ", imageVolume)
+
 	// create a directory under which we keep everything while building
-	builddir, err := os.MkdirTemp(shared.VarPath("images"), "lxd_build_")
+	builddir, err := os.MkdirTemp(shared.ImagesPath(projectName, imageVolume), "lxd_build_")
 	if err != nil {
 		return response.InternalError(err)
 	}
@@ -1250,6 +1262,8 @@ func imagesPost(d *Daemon, r *http.Request) response.Response {
 				imagePublishLock.Unlock()
 			}
 		}
+
+		fmt.Println("Got image in ", builddir, ", project ", projectName)
 
 		// Set the metadata if possible, even if there is an error
 		if info != nil {
@@ -2183,8 +2197,8 @@ func distributeImage(ctx context.Context, s *state.State, nodes []string, oldFin
 		}
 
 		createArgs := &lxd.ImageCreateArgs{}
-		imageMetaPath := shared.VarPath("images", newImage.Fingerprint)
-		imageRootfsPath := shared.VarPath("images", newImage.Fingerprint+".rootfs")
+		imageMetaPath := filepath.Join(shared.ImagesPath(newImage.Project, ""), newImage.Fingerprint)
+		imageRootfsPath := imageMetaPath + ".rootfs"
 
 		metaFile, err := os.Open(imageMetaPath)
 		if err != nil {
@@ -2279,22 +2293,22 @@ func autoUpdateImage(ctx context.Context, s *state.State, op *operations.Operati
 	fingerprint := info.Fingerprint
 	var source api.ImageSource
 
+	var project *api.Project
+	err := s.DB.Cluster.Transaction(context.TODO(), func(ctx context.Context, tx *db.ClusterTx) error {
+		p, err := dbCluster.GetProject(ctx, tx.Tx(), projectName)
+		if err != nil {
+			return err
+		}
+
+		project, err = p.ToAPI(ctx, tx.Tx())
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	if !manual {
 		var interval int64
-
-		var project *api.Project
-		err := s.DB.Cluster.Transaction(context.TODO(), func(ctx context.Context, tx *db.ClusterTx) error {
-			p, err := dbCluster.GetProject(ctx, tx.Tx(), projectName)
-			if err != nil {
-				return err
-			}
-
-			project, err = p.ToAPI(ctx, tx.Tx())
-			return err
-		})
-		if err != nil {
-			return nil, err
-		}
 
 		if project.Config["images.auto_update_interval"] != "" {
 			interval, err = strconv.ParseInt(project.Config["images.auto_update_interval"], 10, 64)
@@ -2319,7 +2333,7 @@ func autoUpdateImage(ctx context.Context, s *state.State, op *operations.Operati
 
 	var poolNames []string
 
-	err := s.DB.Cluster.Transaction(context.TODO(), func(ctx context.Context, tx *db.ClusterTx) error {
+	err = s.DB.Cluster.Transaction(context.TODO(), func(ctx context.Context, tx *db.ClusterTx) error {
 		var err error
 		_, source, err = tx.GetImageSource(ctx, id)
 		if err != nil {
@@ -2477,7 +2491,7 @@ func autoUpdateImage(ctx context.Context, s *state.State, op *operations.Operati
 	}
 
 	// Remove main image file.
-	fname := filepath.Join(s.OS.VarDir, "images", fingerprint)
+	fname := filepath.Join(shared.ImagesPath(project.Name, ""), fingerprint)
 	if shared.PathExists(fname) {
 		err = os.Remove(fname)
 		if err != nil {
@@ -2486,7 +2500,7 @@ func autoUpdateImage(ctx context.Context, s *state.State, op *operations.Operati
 	}
 
 	// Remove the rootfs file for the image.
-	fname = filepath.Join(s.OS.VarDir, "images", fingerprint) + ".rootfs"
+	fname = filepath.Join(shared.ImagesPath(project.Name, ""), fingerprint) + ".rootfs"
 	if shared.PathExists(fname) {
 		err = os.Remove(fname)
 		if err != nil {
@@ -2499,6 +2513,7 @@ func autoUpdateImage(ctx context.Context, s *state.State, op *operations.Operati
 }
 
 func pruneExpiredImagesTask(d *Daemon) (task.Func, task.Schedule) {
+	// ERSIN TODO cleanup project images here
 	f := func(ctx context.Context) {
 		s := d.State()
 
@@ -2552,6 +2567,8 @@ func pruneExpiredImagesTask(d *Daemon) (task.Func, task.Schedule) {
 }
 
 func pruneLeftoverImages(s *state.State) {
+	// ERSIN TODO clean up per-project images here
+
 	opRun := func(op *operations.Operation) error {
 		// Check if dealing with shared image storage.
 		var storageImages string
@@ -2603,7 +2620,7 @@ func pruneLeftoverImages(s *state.State) {
 		}
 
 		// Look at what's in the images directory
-		entries, err := os.ReadDir(shared.VarPath("images"))
+		entries, err := os.ReadDir(shared.ImagesPath("", ""))
 		if err != nil {
 			return fmt.Errorf("Unable to list the images directory: %w", err)
 		}
@@ -2612,7 +2629,7 @@ func pruneLeftoverImages(s *state.State) {
 		for _, entry := range entries {
 			fp := strings.Split(entry.Name(), ".")[0]
 			if !shared.ValueInSlice(fp, images) {
-				err = os.RemoveAll(shared.VarPath("images", entry.Name()))
+				err = os.RemoveAll(filepath.Join(shared.ImagesPath("", ""), entry.Name()))
 				if err != nil {
 					return fmt.Errorf("Unable to remove leftover image: %v: %w", entry.Name(), err)
 				}
@@ -2652,6 +2669,8 @@ func pruneLeftoverImages(s *state.State) {
 }
 
 func pruneExpiredImages(ctx context.Context, s *state.State, op *operations.Operation) error {
+	// ERSIN TODO clean up per-project images here
+
 	var err error
 	var projectsImageRemoteCacheExpiryDays map[string]int64
 	var allImages map[string][]dbCluster.Image
@@ -2792,7 +2811,7 @@ func pruneExpiredImages(ctx context.Context, s *state.State, op *operations.Oper
 		}
 
 		// Remove main image file.
-		err := imageDeleteFromDisk(fingerprint)
+		err := imageDeleteFromDisk(fingerprint, nil)
 		if err != nil {
 			return err
 		}
@@ -2954,8 +2973,25 @@ func imageDelete(d *Daemon, r *http.Request) response.Response {
 			}
 		}
 
+		var p *api.Project
+		err = s.DB.Cluster.Transaction(context.TODO(), func(ctx context.Context, tx *db.ClusterTx) error {
+			// Check image still exists and another request hasn't removed it since we resolved the image
+			// fingerprint above.
+			exist, err = tx.ImageExists(ctx, projectName, details.image.Fingerprint)
+			project, err := dbCluster.GetProject(ctx, tx.Tx(), projectName)
+			if err != nil {
+				return err
+			}
+			p, err = project.ToAPI(ctx, tx.Tx())
+
+			return err
+		})
+		if err != nil {
+			return err
+		}
+
 		// Remove main image file from disk.
-		err = imageDeleteFromDisk(details.image.Fingerprint)
+		err = imageDeleteFromDisk(details.image.Fingerprint, p)
 		if err != nil {
 			return err
 		}
@@ -2987,9 +3023,9 @@ func imageDelete(d *Daemon, r *http.Request) response.Response {
 }
 
 // imageDeleteFromDisk removes the main image file and rootfs file of an image.
-func imageDeleteFromDisk(fingerprint string) error {
+func imageDeleteFromDisk(fingerprint string, project *api.Project) error {
 	// Remove main image file.
-	fname := shared.VarPath("images", fingerprint)
+	fname := filepath.Join(shared.ImagesPath(project.Name, project.Config["storage.images_volume"]), fingerprint)
 	if shared.PathExists(fname) {
 		err := os.Remove(fname)
 		if err != nil && !os.IsNotExist(err) {
@@ -2998,7 +3034,7 @@ func imageDeleteFromDisk(fingerprint string) error {
 	}
 
 	// Remove the rootfs file for the image.
-	fname = shared.VarPath("images", fingerprint) + ".rootfs"
+	fname = filepath.Join(shared.ImagesPath(project.Name, project.Config["storage.images_volume"]), fingerprint) + ".rootfs"
 	if shared.PathExists(fname) {
 		err := os.Remove(fname)
 		if err != nil && !os.IsNotExist(err) {
@@ -4351,7 +4387,7 @@ func imageExport(d *Daemon, r *http.Request) response.Response {
 		return response.ForwardedResponse(client, r)
 	}
 
-	imagePath := shared.VarPath("images", imgInfo.Fingerprint)
+	imagePath := filepath.Join(shared.ImagesPath(projectName, ""), imgInfo.Fingerprint)
 	rootfsPath := imagePath + ".rootfs"
 
 	_, ext, _, err := shared.DetectCompression(imagePath)
@@ -4466,8 +4502,8 @@ func imageExportPost(d *Daemon, r *http.Request) response.Response {
 
 	run := func(op *operations.Operation) error {
 		createArgs := &lxd.ImageCreateArgs{}
-		imageMetaPath := shared.VarPath("images", details.imageFingerprintPrefix)
-		imageRootfsPath := shared.VarPath("images", details.imageFingerprintPrefix+".rootfs")
+		imageMetaPath := filepath.Join(shared.ImagesPath(projectName, ""), details.imageFingerprintPrefix)
+		imageRootfsPath := imageMetaPath + ".rootfs"
 
 		metaFile, err := os.Open(imageMetaPath)
 		if err != nil {
@@ -4638,7 +4674,7 @@ func imageImportFromNode(imagesDir string, client lxd.InstanceServer, fingerprin
 	} else {
 		// This is a split image.
 		metaPath := filepath.Join(imagesDir, fingerprint)
-		rootfsPath := filepath.Join(imagesDir, fingerprint+".rootfs")
+		rootfsPath := metaPath + ".rootfs"
 
 		err := shared.FileMove(metaFile.Name(), metaPath)
 		if err != nil {

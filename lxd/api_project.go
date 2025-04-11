@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -25,7 +27,10 @@ import (
 	"github.com/canonical/lxd/lxd/project/limits"
 	"github.com/canonical/lxd/lxd/request"
 	"github.com/canonical/lxd/lxd/response"
+	"github.com/canonical/lxd/lxd/rsync"
 	"github.com/canonical/lxd/lxd/state"
+	storagePools "github.com/canonical/lxd/lxd/storage"
+	storageDrivers "github.com/canonical/lxd/lxd/storage/drivers"
 	"github.com/canonical/lxd/lxd/util"
 	"github.com/canonical/lxd/shared"
 	"github.com/canonical/lxd/shared/api"
@@ -348,6 +353,22 @@ func projectsPost(d *Daemon, r *http.Request) response.Response {
 	})
 	if err != nil {
 		return response.SmartError(fmt.Errorf("Failed creating project %q: %w", project.Name, err))
+	}
+
+	// Create project image directory if separate image storage is configured
+	if project.Config["storage.images_volume"] != "" {
+		imagesDir := shared.ImagesPath(project.Name, project.Config["storage.images_volume"])
+		err = os.Mkdir(imagesDir, 0700)
+		if err != nil {
+			if !os.IsExist(err) {
+				return response.SmartError(fmt.Errorf("Failed to create project images dir %q: %w", imagesDir, err))
+			}
+
+			err = os.Chmod(imagesDir, 0700)
+			if err != nil && !os.IsNotExist(err) {
+				return response.SmartError(fmt.Errorf("Failed to chmod project images dir %q: %w", imagesDir, err))
+			}
+		}
 	}
 
 	requestor := request.CreateRequestor(r)
@@ -692,6 +713,160 @@ func projectPatch(d *Daemon, r *http.Request) response.Response {
 	return projectChange(s, project, req)
 }
 
+func imagesStorageMove(s *state.State, project string, oldImagesVolume string, req api.ProjectPut) error {
+	fmt.Println("ERSIN project.Name: ", project, ", images_volume: ", oldImagesVolume)
+	destPath := shared.ImagesPath(project, oldImagesVolume)
+
+	sourcePath, err := os.Readlink(destPath)
+	if err != nil {
+		fmt.Println("ERSIN not a symlink: ", destPath)
+		sourcePath = shared.ImagesPath("", "")
+	}
+	fields := strings.Split(sourcePath, "/")
+	sourcePool := fields[len(fields)-3]
+	sourceVolume := fields[len(fields)-1]
+
+	moveContent := func(source string, target string) error {
+		// Copy the content.
+		_, err := rsync.LocalCopy(source, target, "", false)
+		if err != nil {
+			return err
+		}
+
+		// Remove the source content.
+		entries, err := os.ReadDir(source)
+		if err != nil {
+			return err
+		}
+
+		for _, entry := range entries {
+			err := os.RemoveAll(filepath.Join(source, entry.Name()))
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
+	// Deal with unsetting
+	if req.Config["storage.images_volume"] == "" {
+		fmt.Println("ERSIN unset oldImagesVolume: ", oldImagesVolume, ", new: ", req.Config["storage.images_volume"])
+
+		// Remove the symlink.
+		err := os.Remove(destPath)
+		if err != nil {
+			return fmt.Errorf("Failed to delete storage symlink at %q: %w", destPath, err)
+		}
+
+		// Move the data across.
+		err = moveContent(sourcePath, shared.ImagesPath("", ""))
+		if err != nil {
+			return fmt.Errorf("Failed to move data over to directory %q: %w", shared.ImagesPath("", ""), err)
+		}
+
+		pool, err := storagePools.LoadByName(s, sourcePool)
+		if err != nil {
+			return err
+		}
+
+		// Unmount old volume.
+		projectName, sourceVolumeName := projecthelpers.StorageVolumeParts(sourceVolume)
+		_, err = pool.UnmountCustomVolume(projectName, sourceVolumeName, nil)
+		if err != nil {
+			return fmt.Errorf(`Failed to umount storage volume "%s/%s": %w`, sourcePool, sourceVolumeName, err)
+		}
+
+		return nil
+	}
+
+	// Parse the target.
+	poolName, volumeName, err := daemonStorageSplitVolume(req.Config["storage.images_volume"])
+	if err != nil {
+		return err
+	}
+
+	pool, err := storagePools.LoadByName(s, poolName)
+	if err != nil {
+		return err
+	}
+
+	// Mount volume.
+	_, err = pool.MountCustomVolume(api.ProjectDefaultName, volumeName, nil)
+	if err != nil {
+		return fmt.Errorf("Failed to mount storage volume %q: %w", req.Config["storage.images_volume"], err)
+	}
+
+	// Set ownership & mode.
+	volStorageName := projecthelpers.StorageVolume(api.ProjectDefaultName, volumeName)
+	mountpoint := storageDrivers.GetVolumeMountPath(poolName, storageDrivers.VolumeTypeCustom, volStorageName)
+	destPath = mountpoint
+
+	err = os.Chmod(mountpoint, 0700)
+	if err != nil {
+		return fmt.Errorf("Failed to set permissions on %q: %w", mountpoint, err)
+	}
+
+	err = os.Chown(mountpoint, 0, 0)
+	if err != nil {
+		return fmt.Errorf("Failed to set ownership on %q: %w", mountpoint, err)
+	}
+
+	// Handle changes.
+	if sourcePath != shared.ImagesPath("", "") {
+		fmt.Println("ERSIN move from ", sourcePath, " to ", destPath)
+		// Remove the symlink.
+		err := os.Remove(shared.ImagesPath(project, oldImagesVolume))
+		if err != nil {
+			return fmt.Errorf("Failed to remove the new symlink at %q: %w", shared.ImagesPath(project, oldImagesVolume), err)
+		}
+
+		// Create the new symlink.
+		err = os.Symlink(destPath, shared.ImagesPath(project, oldImagesVolume))
+		if err != nil {
+			return fmt.Errorf("Failed to create the new symlink at %q: %w", shared.ImagesPath(project, oldImagesVolume), err)
+		}
+
+		// Move the data across.
+		err = moveContent(sourcePath, destPath)
+		if err != nil {
+			return fmt.Errorf("Failed to move data over to directory %q: %w", destPath, err)
+		}
+
+		pool, err := storagePools.LoadByName(s, sourcePool)
+		if err != nil {
+			return err
+		}
+
+		// Unmount old volume.
+		projectName, sourceVolumeName := projecthelpers.StorageVolumeParts(sourceVolume)
+		_, err = pool.UnmountCustomVolume(projectName, sourceVolumeName, nil)
+		if err != nil {
+			return fmt.Errorf(`Failed to umount storage volume "%s/%s": %w`, sourcePool, sourceVolumeName, err)
+		}
+
+		return nil
+	}
+
+	fmt.Println("ERSIN setting value to ", req.Config["storage.images_volume"])
+	// Create the new symlink.
+	err = os.Symlink(destPath, shared.ImagesPath(project, req.Config["storage.images_volume"]))
+	if err != nil {
+		return fmt.Errorf("Failed to create the new symlink at %q: %w", shared.ImagesPath(project, req.Config["storage.images_volume"]), err)
+	}
+
+	// Move the data across.
+	// ERSIN TODO move project images
+	/*
+		err = moveContent(sourcePath, destPath)
+		if err != nil {
+			return fmt.Errorf("Failed to move data over to directory %q: %w", destPath, err)
+		}
+	*/
+
+	return nil
+}
+
 // Common logic between PUT and PATCH.
 func projectChange(s *state.State, project *api.Project, req api.ProjectPut) response.Response {
 	// Make a list of config keys that have changed.
@@ -751,6 +926,13 @@ func projectChange(s *state.State, project *api.Project, req api.ProjectPut) res
 		return response.BadRequest(err)
 	}
 
+	// Create project image directory if separate image storage is configured
+	oldImagesVolume := ""
+	if shared.ValueInSlice("storage.images_volume", configChanged) {
+		fmt.Println("ERSIN project config: ", project.Config["storage.images_volume"], ", req config: ", req.Config["storage.images_volume"])
+		oldImagesVolume = project.Config["storage.images_volume"]
+	}
+
 	// Update the database entry.
 	err = s.DB.Cluster.Transaction(s.ShutdownCtx, func(ctx context.Context, tx *db.ClusterTx) error {
 		err := limits.AllowProjectUpdate(ctx, s.GlobalConfig, tx, project.Name, req.Config, configChanged)
@@ -787,6 +969,15 @@ func projectChange(s *state.State, project *api.Project, req api.ProjectPut) res
 
 		return nil
 	})
+
+	// Create project image directory if separate image storage is configured
+	if shared.ValueInSlice("storage.images_volume", configChanged) {
+		fmt.Println("ERSIN value in slice storage.images_volume")
+		err = imagesStorageMove(s, project.Name, oldImagesVolume, req)
+		if err != nil {
+			return response.SmartError(err)
+		}
+	}
 
 	if err != nil {
 		return response.SmartError(err)
@@ -843,6 +1034,8 @@ func projectPost(d *Daemon, r *http.Request) response.Response {
 		return response.Forbidden(fmt.Errorf("The 'default' project cannot be renamed"))
 	}
 
+	var imagesVolume string
+
 	// Perform the rename.
 	run := func(op *operations.Operation) error {
 		err := s.DB.Cluster.Transaction(context.TODO(), func(ctx context.Context, tx *db.ClusterTx) error {
@@ -874,16 +1067,43 @@ func projectPost(d *Daemon, r *http.Request) response.Response {
 				return err
 			}
 
+			config, err := cluster.GetProjectConfig(ctx, tx.Tx(), project.ID)
+			if err != nil {
+				return err
+			}
+
+			imagesVolume = config["storage.images_volume"]
+
 			return cluster.RenameProject(ctx, tx.Tx(), name, req.Name)
 		})
 		if err != nil {
 			return err
 		}
 
+		// If project has dedicated image store, rename the directory
+		if imagesVolume != "" {
+			oldDir := shared.ImagesPath(name, imagesVolume)
+			newDir := shared.ImagesPath(req.Name, imagesVolume)
+			err = os.Rename(oldDir, newDir)
+			if err != nil {
+				return fmt.Errorf("Failed to rename project images dir %q: %w", oldDir, err)
+			}
+		}
+
+		return nil
+
 		requestor := request.CreateRequestor(r)
 		s.Events.SendLifecycle(req.Name, lifecycle.ProjectRenamed.Event(req.Name, requestor, logger.Ctx{"old_name": name}))
 
 		return nil
+	}
+
+	// Rename the project-specific images directory, if any
+	oldDir := shared.ImagesPath(name, imagesVolume)
+	newDir := shared.ImagesPath(req.Name, imagesVolume)
+	err = os.Rename(oldDir, newDir)
+	if err != nil {
+		return response.SmartError(fmt.Errorf("Failed to rename project images dir %q: %w", oldDir, err))
 	}
 
 	op, err := operations.OperationCreate(s, "", operations.OperationClassTask, operationtype.ProjectRename, nil, nil, run, nil, nil, r)

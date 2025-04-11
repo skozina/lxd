@@ -237,6 +237,14 @@ func VarPath(path ...string) string {
 	return filepath.Join(items...)
 }
 
+func ImagesPath(project string, imagesVolume string) string {
+	if project == "" || project == "default" || imagesVolume == "" {
+		return VarPath("images", "daemon")
+	}
+
+	return VarPath("images", "project_"+project)
+}
+
 // CachePath returns the directory that LXD should its cache under. If LXD_DIR is
 // set, this path is $LXD_DIR/cache, otherwise it is /var/cache/lxd.
 func CachePath(path ...string) string {

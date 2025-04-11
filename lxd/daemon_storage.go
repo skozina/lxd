@@ -252,7 +252,7 @@ func daemonStorageValidate(s *state.State, target string) (validatedTarget strin
 }
 
 func daemonStorageMove(s *state.State, storageType string, target string) error {
-	destPath := shared.VarPath(storageType)
+	destPath := shared.VarPath(storageType, "daemon")
 
 	// Track down the current storage.
 	var sourcePool string
@@ -363,17 +363,17 @@ func daemonStorageMove(s *state.State, storageType string, target string) error 
 	}
 
 	// Handle changes.
-	if sourcePath != shared.VarPath(storageType) {
+	if sourcePath != shared.VarPath(storageType, "daemon") {
 		// Remove the symlink.
-		err := os.Remove(shared.VarPath(storageType))
+		err := os.Remove(shared.VarPath(storageType, "daemon"))
 		if err != nil {
-			return fmt.Errorf("Failed to remove the new symlink at %q: %w", shared.VarPath(storageType), err)
+			return fmt.Errorf("Failed to remove the new symlink at %q: %w", shared.VarPath(storageType, "daemon"), err)
 		}
 
 		// Create the new symlink.
-		err = os.Symlink(destPath, shared.VarPath(storageType))
+		err = os.Symlink(destPath, shared.VarPath(storageType, "daemon"))
 		if err != nil {
-			return fmt.Errorf("Failed to create the new symlink at %q: %w", shared.VarPath(storageType), err)
+			return fmt.Errorf("Failed to create the new symlink at %q: %w", shared.VarPath(storageType, "daemon"), err)
 		}
 
 		// Move the data across.
@@ -397,18 +397,18 @@ func daemonStorageMove(s *state.State, storageType string, target string) error 
 		return nil
 	}
 
-	sourcePath = shared.VarPath(storageType) + ".temp"
+	sourcePath = shared.VarPath(storageType, "daemon") + ".temp"
 
 	// Rename the existing storage.
-	err = os.Rename(shared.VarPath(storageType), sourcePath)
+	err = os.Rename(shared.VarPath(storageType, "daemon"), sourcePath)
 	if err != nil {
-		return fmt.Errorf("Failed to rename existing storage %q: %w", shared.VarPath(storageType), err)
+		return fmt.Errorf("Failed to rename existing storage %q: %w", shared.VarPath(storageType, "daemon"), err)
 	}
 
 	// Create the new symlink.
-	err = os.Symlink(destPath, shared.VarPath(storageType))
+	err = os.Symlink(destPath, shared.VarPath(storageType, "daemon"))
 	if err != nil {
-		return fmt.Errorf("Failed to create the new symlink at %q: %w", shared.VarPath(storageType), err)
+		return fmt.Errorf("Failed to create the new symlink at %q: %w", shared.VarPath(storageType, "daemon"), err)
 	}
 
 	// Move the data across.

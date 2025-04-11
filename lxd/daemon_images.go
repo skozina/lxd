@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/canonical/lxd/client"
+	lxd "github.com/canonical/lxd/client"
 	"github.com/canonical/lxd/lxd/db"
 	"github.com/canonical/lxd/lxd/db/cluster"
 	"github.com/canonical/lxd/lxd/lifecycle"
@@ -320,9 +320,19 @@ func ImageDownload(r *http.Request, s *state.State, op *operations.Operation, ar
 
 	logger.Info("Downloading image", ctxMap)
 
+	var imageVolume string
+	err = s.DB.Cluster.Transaction(s.ShutdownCtx, func(ctx context.Context, tx *db.ClusterTx) error {
+		imageVolume, err = cluster.ProjectImagesVolume(ctx, tx.Tx(), args.ProjectName)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	// Cleanup any leftover from a past attempt
-	destDir := shared.VarPath("images")
+	destDir := shared.ImagesPath(args.ProjectName, imageVolume)
 	destName := filepath.Join(destDir, fp)
+	fmt.Println("ERSIN download file to:", destDir)
 
 	failure := true
 	cleanup := func() {
@@ -408,7 +418,7 @@ func ImageDownload(r *http.Request, s *state.State, op *operations.Operation, ar
 			ProgressHandler: progress,
 			Canceler:        canceler,
 			DeltaSourceRetriever: func(fingerprint string, file string) string {
-				path := shared.VarPath("images", fmt.Sprintf("%s.%s", fingerprint, file))
+				path := shared.ImagesPath(args.ProjectName, imageVolume) + fmt.Sprintf("%s.%s", fingerprint, file)
 				if shared.PathExists(path) {
 					return path
 				}

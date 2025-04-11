@@ -19,10 +19,13 @@ profile "{{.name}}" {
   {{$element}} mixr,
 {{- end }}
 
+{{range $index, $element := .imagesPaths}}
+  {{$element}}/** r,
+{{- end }}
+
   {{ .outputPath }}/ rw,
   {{ .outputPath }}/** rwl,
   {{ .backupsPath }}/** rw,
-  {{ .imagesPath }}/** r,
 
   signal (receive) set=("term"),
 
@@ -105,10 +108,19 @@ func archiveProfile(outputPath string, allowedCommandPaths []string) (string, er
 		backupsPath = backupsPathFull
 	}
 
-	imagesPath := shared.VarPath("images")
-	imagesPathFull, err := filepath.EvalSymlinks(imagesPath)
-	if err == nil {
-		imagesPath = imagesPathFull
+	entries, err := os.ReadDir(shared.VarPath("images"))
+	if err != nil {
+		return "", err
+	}
+
+	imagesPaths := make([]string, len(entries))
+	for i, entry := range entries {
+		imagesPathFull, err := filepath.EvalSymlinks(filepath.Join(shared.VarPath("images"), entry.Name()))
+		if err == nil {
+			imagesPaths[i] = imagesPathFull
+		} else {
+			imagesPaths[i] = filepath.Join(shared.VarPath("images"), entry.Name())
+		}
 	}
 
 	derefCommandPaths := make([]string, len(allowedCommandPaths))
@@ -128,7 +140,7 @@ func archiveProfile(outputPath string, allowedCommandPaths []string) (string, er
 		"outputPath":          outputPathFull,                 // Use deferenced path in AppArmor profile.
 		"rootPath":            rootPath,
 		"backupsPath":         backupsPath,
-		"imagesPath":          imagesPath,
+		"imagesPaths":         imagesPaths,
 		"allowedCommandPaths": derefCommandPaths,
 		"snap":                shared.InSnap(),
 	})
