@@ -77,7 +77,50 @@ func instanceImageTransfer(s *state.State, r *http.Request, projectName string, 
 
 	client = client.UseProject(projectName)
 
-	err = imageImportFromNode(filepath.Join(s.OS.VarDir, "images"), client, hash)
+	var imageVolume string
+	err = s.DB.Cluster.Transaction(s.ShutdownCtx, func(ctx context.Context, tx *db.ClusterTx) error {
+		imageVolume, err = dbCluster.ProjectImagesVolume(ctx, tx.Tx(), projectName)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+
+	err = imageImportFromNode(shared.ImagesPath(projectName, imageVolume), client, hash)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// projectImageTransfer transfers an image from another project on the same node.
+func projectImageTransfer(s *state.State, r *http.Request, sourceProject string, destProject string, hash string) error {
+	logger.Debugf("Transferring image %q from project %q to project %q", hash, sourceProject, destProject)
+	fmt.Printf("ERSIN Transferring image %q from project %q to project %q\n", hash, sourceProject, destProject)
+
+	var sourceImageVolume string
+	var destImageVolume string
+	err := s.DB.Cluster.Transaction(s.ShutdownCtx, func(ctx context.Context, tx *db.ClusterTx) error {
+		var err error
+		sourceImageVolume, err = dbCluster.ProjectImagesVolume(ctx, tx.Tx(), sourceProject)
+		if err != nil {
+			return err
+		}
+		destImageVolume, err = dbCluster.ProjectImagesVolume(ctx, tx.Tx(), destProject)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+
+	sourcePath := filepath.Join(shared.ImagesPath(sourceProject, sourceImageVolume), hash)
+	destPath := filepath.Join(shared.ImagesPath(destProject, destImageVolume), hash)
+	err = shared.FileCopy(sourcePath, destPath)
+	if err != nil {
+		return err
+	}
+	err = shared.FileCopy(sourcePath+".rootfs", destPath+".rootfs")
 	if err != nil {
 		return err
 	}

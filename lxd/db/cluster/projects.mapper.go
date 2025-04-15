@@ -110,7 +110,7 @@ func getProjectsRaw(ctx context.Context, tx *sql.Tx, sql string, args ...any) ([
 
 	err := query.Scan(ctx, tx, sql, dest, args...)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch from \"projects\" table: %w", err)
+		return nil, fmt.Errorf("Failed to fetc from \"projects\" table: %w", err)
 	}
 
 	return objects, nil

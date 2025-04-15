@@ -193,9 +193,13 @@ func ImageDownload(r *http.Request, s *state.State, op *operations.Operation, ar
 			}
 		}
 	} else if response.IsNotFoundError(err) {
+		var sourceProject string
 		err = s.DB.Cluster.Transaction(context.TODO(), func(ctx context.Context, tx *db.ClusterTx) error {
 			// Check if the image already exists in some other project.
 			_, imgInfo, err = tx.GetImageFromAnyProject(ctx, fp)
+			if err == nil {
+				sourceProject = imgInfo.Project
+			}
 
 			return err
 		})
@@ -241,6 +245,12 @@ func ImageDownload(r *http.Request, s *state.State, op *operations.Operation, ar
 			if nodeAddress != "" {
 				// The image is available from another node, let's try to import it.
 				err = instanceImageTransfer(s, r, args.ProjectName, info.Fingerprint, nodeAddress)
+				if err != nil {
+					return nil, fmt.Errorf("Failed transferring image: %w", err)
+				}
+			} else {
+				// The image is available in another project locally, let's try to import it.
+				err = projectImageTransfer(s, r, sourceProject, args.ProjectName, info.Fingerprint)
 				if err != nil {
 					return nil, fmt.Errorf("Failed transferring image: %w", err)
 				}
