@@ -19,6 +19,19 @@ test_filemanip() {
   err=$(my_curl -o /dev/null -w "%{http_code}" -X GET "https://${LXD_ADDR}/1.0/containers/filemanip/files?path=/tmp/foo")
   [ "${err}" -eq "404" ]
 
+  myuid=1522341878
+  useradd --uid "${myuid}" myuser
+  chown myuser "${LXD_DIR}"/unix.socket
+  chown myuser "${LXD_CONF}"
+  chown myuser "${TEST_DIR}/filemanip"
+  LXC="$(which lxc)"
+  sudo -u myuser -E ${LXC} --project=test file push ${TEST_DIR}/filemanip filemanip/root/
+  [ "$(lxc exec filemanip --project=test -- cat /root/filemanip)" = "test" ]
+  chown root "${TEST_DIR}/filemanip"
+  chown root "${LXD_DIR}/unix.socket"
+  chown root "${LXD_CONF}"
+  userdel myuser
+
   # lxc {push|pull} -r
   mkdir "${TEST_DIR}"/source
   mkdir "${TEST_DIR}"/source/another_level
