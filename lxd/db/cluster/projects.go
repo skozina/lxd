@@ -117,6 +117,35 @@ SELECT projects_config.value
 	return shared.IsTrue(values[0]), nil
 }
 
+// ProjectsConfigValues is a helper to return all project with specific config set.
+func ProjectConfigValues(ctx context.Context, tx *sql.Tx, config string) (map[string]string, error) {
+	stmt := `
+SELECT projects.name, projects_config.value
+  FROM projects_config
+  JOIN projects ON projects.id=projects_config.project_id
+ WHERE projects_config.key=?
+`
+
+	rows, err := tx.QueryContext(ctx, stmt, config)
+	if err != nil {
+		fmt.Println("ERSIN get configs failed: ", err)
+		return nil, fmt.Errorf("Fetch project configs: %w", err)
+	}
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var project, value string
+		err = rows.Scan(&project, &value)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to scan project config row: %w", err)
+		}
+
+		result[project] = value
+	}
+
+	return result, nil
+}
+
 // GetProjectNames returns the names of all availablprojects.
 func GetProjectNames(ctx context.Context, tx *sql.Tx) ([]string, error) {
 	stmt := "SELECT name FROM projects"

@@ -319,6 +319,20 @@ func projectsPost(d *Daemon, r *http.Request) response.Response {
 		return response.BadRequest(err)
 	}
 
+	if project.Config["storage.images_volume"] != "" {
+		err = daemonStorageMove(s, "images", s.LocalConfig.StorageImagesVolume(), project.Config["storage.images_volume"], project.Name)
+		if err != nil {
+			return response.SmartError(fmt.Errorf("Failed moving project images storage: %w", err))
+		}
+	}
+
+	if project.Config["storage.backups_volume"] != "" {
+		err = daemonStorageMove(s, "backups", s.LocalConfig.StorageBackupsVolume(), project.Config["storage.backups_volume"], project.Name)
+		if err != nil {
+			return response.SmartError(fmt.Errorf("Failed moving project backups storage: %w", err))
+		}
+	}
+
 	var id int64
 	err = s.DB.Cluster.Transaction(context.TODO(), func(ctx context.Context, tx *db.ClusterTx) error {
 		id, err = cluster.CreateProject(ctx, tx.Tx(), cluster.Project{Description: project.Description, Name: project.Name})
@@ -750,6 +764,20 @@ func projectChange(s *state.State, project *api.Project, req api.ProjectPut) res
 	err := projectValidateConfig(s, req.Config, "")
 	if err != nil {
 		return response.BadRequest(err)
+	}
+
+	if slices.Contains(configChanged, "storage.images_volume") {
+		err = daemonStorageMove(s, "images", project.Config["storage.images_volume"], req.Config["storage.images_volume"], project.Name)
+		if err != nil {
+			return response.SmartError(fmt.Errorf("Failed moving project images storage: %w", err))
+		}
+	}
+
+	if slices.Contains(configChanged, "storage.backups_volume") {
+		err = daemonStorageMove(s, "backups", project.Config["storage.backups_volume"], req.Config["storage.backups_volume"], project.Name)
+		if err != nil {
+			return response.SmartError(fmt.Errorf("Failed moving project backups storage: %w", err))
+		}
 	}
 
 	// Update the database entry.
