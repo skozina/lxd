@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/canonical/lxd/shared"
 )
 
 type SQLMetrics struct {
