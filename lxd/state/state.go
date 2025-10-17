@@ -26,6 +26,8 @@ import (
 	"github.com/canonical/lxd/lxd/ubuntupro"
 	"github.com/canonical/lxd/shared"
 	"github.com/canonical/lxd/shared/cancel"
+
+	workflowClient "github.com/cschleiden/go-workflows/client"
 )
 
 // State is a gateway to the two main stateful components of LXD, the database
@@ -116,6 +118,8 @@ type State struct {
 
 	// CoreAuthSecrets returns the current secrets.
 	CoreAuthSecrets func(ctx context.Context) (cluster.AuthSecrets, error)
+
+	WorkflowClient *workflowClient.Client
 }
 
 // LeaderInfo represents information regarding cluster member leadership.

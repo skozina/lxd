@@ -73,12 +73,18 @@ import (
 	"github.com/canonical/lxd/lxd/ucred"
 	"github.com/canonical/lxd/lxd/util"
 	"github.com/canonical/lxd/lxd/warnings"
+	"github.com/canonical/lxd/lxd/workflows"
 	"github.com/canonical/lxd/shared"
 	"github.com/canonical/lxd/shared/api"
 	"github.com/canonical/lxd/shared/cancel"
 	"github.com/canonical/lxd/shared/entity"
 	"github.com/canonical/lxd/shared/logger"
 	"github.com/canonical/lxd/shared/version"
+
+	workflowBackend "github.com/cschleiden/go-workflows/backend"
+	workflowSqlite "github.com/cschleiden/go-workflows/backend/sqlite"
+	workflowClient "github.com/cschleiden/go-workflows/client"
+	workflowWorker "github.com/cschleiden/go-workflows/worker"
 )
 
 // secFetchSiteForbidden defines client Sec-Fetch-Site header values that will be forbidden access.
@@ -174,6 +180,8 @@ type Daemon struct {
 	// internalSecrets holds the current in-memory value of the secrets
 	internalSecrets   dbCluster.AuthSecrets
 	internalSecretsMu sync.Mutex
+
+	workflowClient *workflowClient.Client
 }
 
 // DaemonConfig holds configuration values for Daemon.
@@ -762,6 +770,7 @@ func (d *Daemon) State() *state.State {
 		NetworkReady:        d.waitNetworkReady,
 		StorageReady:        d.waitStorageReady,
 		CoreAuthSecrets:     d.getCoreAuthSecrets,
+		WorkflowClient:      d.workflowClient,
 	}
 
 	s.LeaderInfo = func() (*state.LeaderInfo, error) {
@@ -1984,6 +1993,9 @@ func (d *Daemon) init() error {
 
 	d.tasks = task.NewGroup()
 
+	// Start workflow workers.
+	d.workflowInit(d.shutdownCtx)
+
 	// FIXME: There's no hard reason for which we should not run these
 	//        tasks in mock mode. However it requires that we tweak them so
 	//        they exit gracefully without blocking (something we should do
@@ -2623,4 +2635,27 @@ func (d *Daemon) nodeRefreshTask(heartbeatData *cluster.APIHeartbeat, isLeader b
 	}
 
 	wg.Wait()
+}
+
+func runWorkflowWorker(ctx context.Context, b workflowBackend.Backend) {
+	w := workflowWorker.New(b, nil)
+
+	w.RegisterWorkflow(workflows.ExtendProjectStorageSchemaWorkflow)
+	w.RegisterActivity(workflows.GetClusterNodesActivity)
+	w.RegisterActivity(workflows.ExtendProjectStorageSchemaActivity)
+	w.RegisterActivity(workflows.CreateProjectInDBActivity)
+
+	if err := w.Start(ctx); err != nil {
+		panic("could not start worker")
+	}
+}
+
+func (d *Daemon) workflowInit(ctx context.Context) {
+	b := workflowSqlite.NewSqliteBackend(d.serverName+".sqlite", workflowSqlite.WithBackendOptions([]workflowBackend.BackendOption{}...))
+	d.workflowClient = workflowClient.New(b)
+
+	// Make state available to workflows and activities...
+	workflows.StateFunc = d.State
+
+	go runWorkflowWorker(ctx, b)
 }

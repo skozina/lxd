@@ -32,6 +32,7 @@ import (
 	"github.com/canonical/lxd/lxd/response"
 	"github.com/canonical/lxd/lxd/state"
 	"github.com/canonical/lxd/lxd/util"
+	"github.com/canonical/lxd/lxd/workflows"
 	"github.com/canonical/lxd/shared"
 	"github.com/canonical/lxd/shared/api"
 	"github.com/canonical/lxd/shared/entity"
@@ -325,13 +326,6 @@ func projectsPost(d *Daemon, r *http.Request) response.Response {
 		return response.BadRequest(err)
 	}
 
-	// Extend the node config schema with the project-specific config keys.
-	// Otherwise the node config schema validation will not allow setting of these keys.
-	node.ConfigSchema.Lock()
-	node.ConfigSchema.Types["storage.project."+project.Name+".images_volume"] = config.Key{}
-	node.ConfigSchema.Types["storage.project."+project.Name+".backups_volume"] = config.Key{}
-	node.ConfigSchema.Unlock()
-
 	requestor, err := request.GetRequestor(r.Context())
 	if err != nil {
 		return response.SmartError(err)
@@ -339,50 +333,11 @@ func projectsPost(d *Daemon, r *http.Request) response.Response {
 
 	// On other cluster nodes, we're done.
 	if requestor.IsClusterNotification() {
+		workflows.ExtendLocalConfigSchemaForProject(project.Name)
 		return response.SyncResponse(true, nil)
 	}
 
-	// Send notification to other cluster members to extend the node schema.
-	notifier, err := cluster.NewNotifier(s, s.Endpoints.NetworkCert(), s.ServerCert(), cluster.NotifyAlive)
-	if err != nil {
-		return response.SmartError(err)
-	}
-
-	err = notifier(func(member db.NodeInfo, client lxd.InstanceServer) error {
-		return client.CreateProject(project)
-	})
-	if err != nil {
-		return response.SmartError(fmt.Errorf("Failed to notify other cluster members: %w", err))
-	}
-
-	var id int64
-	err = s.DB.Cluster.Transaction(r.Context(), func(ctx context.Context, tx *db.ClusterTx) error {
-		id, err = dbCluster.CreateProject(ctx, tx.Tx(), dbCluster.Project{Description: project.Description, Name: project.Name})
-		if err != nil {
-			return fmt.Errorf("Failed adding database record: %w", err)
-		}
-
-		err = dbCluster.CreateProjectConfig(ctx, tx.Tx(), id, project.Config)
-		if err != nil {
-			return fmt.Errorf("Unable to create project config for project %q: %w", project.Name, err)
-		}
-
-		if shared.IsTrue(project.Config["features.profiles"]) {
-			err = projectCreateDefaultProfile(ctx, tx, project.Name, project.StoragePool, project.Network)
-			if err != nil {
-				return err
-			}
-
-			if project.Config["features.images"] == "false" {
-				err = dbCluster.InitProjectWithoutImages(ctx, tx.Tx(), project.Name)
-				if err != nil {
-					return err
-				}
-			}
-		}
-
-		return nil
-	})
+	err = workflows.CreateProjectWithWorkflow(r.Context(), d.workflowClient, project)
 	if err != nil {
 		if api.StatusErrorCheck(err, http.StatusConflict) {
 			return response.Conflict(fmt.Errorf("Project %q already exists", project.Name))
